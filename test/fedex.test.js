@@ -18,6 +18,20 @@ test('FedEx uses production by default and sandbox when explicitly selected', ()
   assert.equal(readFedExConfig({ ...credentials, FEDEX_ENV: 'sandbox' }).environment, 'sandbox');
 });
 
+test('FedEx authentication rejects a redirect without forwarding credentials', async () => {
+  const requests = [];
+  const client = createFedExClient(config, async (url, { redirect }) => {
+    requests.push({ path: url.pathname, redirect });
+    return new Response(null, {
+      status: 307,
+      headers: { location: 'https://example.invalid/oauth/token' },
+    });
+  });
+
+  await assert.rejects(client.track(['000001'], false), { status: 307 });
+  assert.deepEqual(requests, [{ path: '/oauth/token', redirect: 'manual' }]);
+});
+
 test('concurrent requests share the refreshed token after a FedEx 401', async () => {
   let tokenRequests = 0;
   const trackingTokens = [];

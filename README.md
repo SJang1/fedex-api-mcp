@@ -24,6 +24,29 @@ FedEx Developer Portal에서 사용할 API 제품이 포함된 프로젝트의 �
 
 `FEDEX_ENV`를 생략하거나 비워 두면 운영 환경을 사용합니다. FedEx 포털에서 필요한 API 제품의 운영 사용을 활성화하고, 운영 키와 배송 계정 번호를 사용합니다. 샌드박스 테스트에는 `FEDEX_ENV=sandbox`를 지정하고 테스트 키와 테스트 배송 계정 번호를 사용합니다. 샌드박스 주소는 `https://apis-sandbox.fedex.com`입니다. [FedEx 운영 전환 안내](https://developer.fedex.com/api/en-us/get-started/shipper.html)
 
+## Dots에서 사용
+
+Sites에 배포한 비공개 `fedex_api` 플러그인을 연결합니다. Dot 프로필의 **Customize → Plugins**에서 연결 상태를 확인하고, 대화에서 `@fedex_api`를 선택합니다.
+
+호스팅 환경은 Sites의 환경 변수 설정에서 관리합니다. `FEDEX_CLIENT_ID`, `FEDEX_CLIENT_SECRET`, `FEDEX_ACCOUNT_NUMBER`는 비밀 변수로 추가합니다. 로컬과 동일한 환경이나 언어를 사용하려면 `FEDEX_ENV`와 `FEDEX_LOCALE`도 설정합니다. Sites가 인증과 접근 권한을 적용한 뒤 MCP 요청을 `/mcp`로 전달합니다.
+
+로컬에서 배포용 Worker를 빌드하려면 `npm ci`와 `npm run site:build`를 실행합니다. Worker와 로컬 MCP는 같은 도구 정의를 사용합니다.
+
+## macOS에서 Codex 로컬 플러그인으로 설치
+
+프로젝트 루트의 `.env`에 위 환경 변수를 설정합니다. 플러그인은 실행할 때 이 파일을 읽습니다. `.env`는 빌드 산출물과 플러그인 설치본 외부에 보관됩니다.
+
+```sh
+npm ci
+npm run plugin:build
+codex plugin marketplace add "$(pwd)/dist/codex-marketplace"
+codex plugin add fedex-api-mcp@fedex-local
+```
+
+새 Codex 채팅에서 **fedex_api** 플러그인을 선택하면 `fedex_track`과 `fedex_quote`를 사용할 수 있습니다. 기존에 같은 MCP를 직접 등록했다면 플러그인 설치를 확인한 뒤 Codex 설정의 `[mcp_servers.fedex]`에서 `enabled = false`로 설정해 중복 로드를 방지할 수 있습니다.
+
+로컬 빌드는 빌드할 때 사용한 Node.js 경로와 이 프로젝트의 `.env` 경로를 사용합니다. 저장소를 옮기거나 Node.js 경로가 바뀌면 새 위치에서 빌드하고 플러그인을 다시 설치합니다. 이 설치 방식은 Codex 데스크톱과 CLI에서 지원됩니다.
+
 ## MCP 클라이언트에 등록
 
 클라이언트가 `mcpServers` 형식의 구성을 지원한다면 다음 항목을 추가합니다. `command`에는 `command -v node`의 결과를, `args`에는 서버 진입점의 절대 경로를 입력합니다. `env`에 실제 환경 변수 값을 설정합니다.

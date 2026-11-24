@@ -8,6 +8,8 @@
   },
   "scripts": {
     "start": "node src/index.js",
+    "plugin:build": "node scripts/build-plugin.mjs",
+    "site:build": "esbuild src/worker.js --bundle --platform=browser --conditions=workerd --format=esm --target=es2022 --outfile=dist/server/index.js",
     "test": "node --test"
   },
   "dependencies": {
@@ -15,6 +17,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.4.0"
+    "@modelcontextprotocol/client": "2.4.0",
+    "esbuild": "0.28.2"
   }
 }

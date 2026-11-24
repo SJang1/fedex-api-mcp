@@ -146,9 +146,8 @@ function addAvailabilityToQuotes(quotes, services, requestedPackagingType) {
   }
 }
 
-export function createFedExClient(config, fetchImpl = globalThis.fetch) {
+export function createFedExClient(config, fetchImpl = globalThis.fetch, tokenCache = {}) {
   const baseUrl = API_URLS[config.environment];
-  let cachedToken;
   let pendingToken;
 
   async function post(path, operation, headers, body) {
@@ -159,7 +158,8 @@ export function createFedExClient(config, fetchImpl = globalThis.fetch) {
         headers: { accept: 'application/json', ...headers },
         body,
         signal,
-        redirect: 'error',
+        // Workers support manual redirects, which keeps credentials on the original URL.
+        redirect: 'manual',
       });
       const data = await response.json().catch(() => undefined);
       if (!response.ok) {
@@ -201,12 +201,12 @@ export function createFedExClient(config, fetchImpl = globalThis.fetch) {
   }
 
   async function getToken() {
-    if (cachedToken?.refreshAt > Date.now()) {
-      return cachedToken;
+    if (tokenCache.token?.refreshAt > Date.now()) {
+      return tokenCache.token;
     }
     pendingToken ??= requestToken()
       .then((token) => {
-        cachedToken = token;
+        tokenCache.token = token;
         return token;
       })
       .finally(() => {
@@ -223,8 +223,8 @@ export function createFedExClient(config, fetchImpl = globalThis.fetch) {
         'x-locale': config.locale,
       }, body);
     } catch (error) {
-      if (error.status === 401 && cachedToken === token) {
-        cachedToken = undefined;
+      if (error.status === 401 && tokenCache.token === token) {
+        tokenCache.token = undefined;
       }
       throw error;
     }

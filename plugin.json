@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "fedex-api-mcp",
+  "version": "0.1.1",
+  "description": "Track FedEx shipments and compare rates, transit times, services, and packaging options.",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "fedex_api",
+        "shortDescription": "FedEx 배송 추적과 운임 조회",
+        "longDescription": "FedEx 운송장을 추적하고 같은 발송 조건으로 예상 운임, 배송 소요 시간, 이용 가능한 서비스와 포장 옵션을 확인합니다.",
+        "category": "Business & Operations",
+        "defaultPrompt": [
+          "FedEx 운송장으로 현재 배송 상태와 예상 배송일을 조회해 줘.",
+          "FedEx 예상 운임, 배송 소요 시간, 이용 가능한 서비스를 비교해 줘."
+        ]
+      }
+    }
+  }
+}
