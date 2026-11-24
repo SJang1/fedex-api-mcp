@@ -36,6 +36,7 @@ try {
   await mkdir(pluginDir, { recursive: true });
   await mkdir(marketplaceConfigDir, { recursive: true });
 
+  await cp(join(projectRoot, 'skills'), join(pluginDir, 'skills'), { recursive: true });
   await cp(join(projectRoot, 'src'), join(pluginDir, 'src'), { recursive: true });
   await cp(join(projectRoot, 'package.json'), join(pluginDir, 'package.json'));
   await cp(join(projectRoot, 'plugin.json'), join(pluginDir, 'plugin.json'));
