@@ -36,6 +36,18 @@ test('Worker serves modern MCP with configured bindings and reuses a completed O
     FEDEX_CLIENT_ID: 'mock-client-id',
     FEDEX_CLIENT_SECRET: 'mock-client-secret',
   };
+  const trackingResponses = {
+    '000000000001': {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      body: '{ "output": { "completeTrackResults": [] } }\n',
+    },
+    '000000000002': {
+      status: 503,
+      headers: { 'content-type': 'text/plain' },
+      body: 'Service unavailable\n',
+    },
+  };
   let tokenRequests = 0;
   t.mock.method(globalThis, 'fetch', async (url, { body, headers }) => {
     assert.equal(url.origin, 'https://apis-sandbox.fedex.com');
@@ -47,7 +59,9 @@ test('Worker serves modern MCP with configured bindings and reuses a completed O
     }
     assert.equal(url.pathname, '/track/v1/trackingnumbers');
     assert.equal(headers.authorization, 'Bearer mock-token');
-    return Response.json({ output: { completeTrackResults: [] } });
+    const { trackingInfo } = JSON.parse(body);
+    const response = trackingResponses[trackingInfo[0].trackingNumberInfo.trackingNumber];
+    return new Response(response.body, { status: response.status, headers: response.headers });
   });
 
   const client = new Client({ name: 'fedex-worker-test', version: '1.0.0' }, {
@@ -59,13 +73,13 @@ test('Worker serves modern MCP with configured bindings and reuses a completed O
   }));
   assert.equal(client.getProtocolEra(), 'modern');
 
-  for (const trackingNumber of ['000000000001', '000000000002']) {
+  for (const [trackingNumber, response] of Object.entries(trackingResponses)) {
     const result = await client.callTool({
       name: 'fedex_track', arguments: { trackingNumbers: [trackingNumber] },
     });
-    assert.equal(Boolean(result.isError), false);
-    assert.equal(result.structuredContent.environment, 'sandbox');
-    assert.deepEqual(result.structuredContent.requestedTrackingNumbers, [trackingNumber]);
+    assert.equal(Boolean(result.isError), response.status !== 200);
+    assert.equal(result.content[0].text, response.body);
+    assert.deepEqual(result.structuredContent, response);
   }
   assert.equal(tokenRequests, 1);
 });

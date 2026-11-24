@@ -30,8 +30,10 @@ function tokenResponse() {
   return Response.json({ access_token: 'mock-quote-token', expires_in: 3600 });
 }
 
-function rateResponse() {
-  return Response.json({
+const responseHeaders = { 'content-type': 'application/json', 'x-fedex-id': 'mock-response' };
+
+function rateResponseBody() {
+  return `${JSON.stringify({
     transactionId: 'rate-transaction',
     output: {
       alerts: [{ code: 'VIRTUAL.RESPONSE', alertType: 'NOTE', message: 'Virtual response' }],
@@ -51,11 +53,11 @@ function rateResponse() {
         { serviceType: 'FEDEX_INTERNATIONAL_CONNECT_PLUS' },
       ],
     },
-  });
+  }, null, 2)}\n`;
 }
 
-function availabilityResponse() {
-  return Response.json({
+function availabilityResponseBody() {
+  return `${JSON.stringify({
     transactionId: 'availability-transaction',
     output: {
       serviceOptions: [
@@ -75,7 +77,7 @@ function availabilityResponse() {
         },
       ],
     },
-  });
+  }, null, 2)}\n`;
 }
 
 test('rates and availability start in parallel using one token and the same shipment', async (t) => {
@@ -104,8 +106,10 @@ test('rates and availability start in parallel using one token and the same ship
   const quotePromise = client.quote(input);
   await bothRequestsStarted.promise;
   clearTimeout(startupDeadline);
-  rates.resolve(rateResponse());
-  availability.resolve(availabilityResponse());
+  const rateBody = rateResponseBody();
+  const availabilityBody = availabilityResponseBody();
+  rates.resolve(new Response(rateBody, { headers: responseHeaders }));
+  availability.resolve(new Response(availabilityBody, { headers: responseHeaders }));
   const quote = await quotePromise;
 
   assert.equal(tokenRequests, 1);
@@ -139,56 +143,43 @@ test('rates and availability start in parallel using one token and the same ship
     },
   });
 
-  assert.equal(quote.environment, 'sandbox');
-  assert.equal(quote.rates.transactionId, 'rate-transaction');
-  assert.equal(quote.rates.virtualResponse, true);
-  assert.equal(quote.serviceAvailability.transactionId, 'availability-transaction');
-  assert.equal(quote.serviceAvailability.virtualResponse, false);
-  assert.deepEqual(quote.serviceAvailability.services[0].packagingOptions, [
-    { packagingType: 'YOUR_PACKAGING', packagingName: 'Your Packaging', rateTypes: ['ACCOUNT', 'LIST'] },
-  ]);
-
-  const [priority, first, economy, unlisted] = quote.rates.quotes;
-  assert.equal(priority.transit.daysInTransit, 'TWO_DAYS');
-  assert.equal(priority.transit.deliveryDate, '2026-11-27T10:30:00');
-  assert.deepEqual(priority.charges, [
-    { rateType: 'ACCOUNT', amount: 84.2, currency: 'USD' },
-    { rateType: 'LIST', amount: 97, currency: 'USD' },
-  ]);
-  assert.deepEqual(priority.availability, { serviceListed: true, packagingListed: true });
-  assert.deepEqual(first.availability, { serviceListed: true, packagingListed: false });
-  assert.deepEqual(economy.availability, { serviceListed: true });
-  assert.deepEqual(unlisted.availability, { serviceListed: false });
+  assert.deepEqual(quote, {
+    rates: { status: 200, headers: responseHeaders, body: rateBody },
+    serviceAvailability: { status: 200, headers: responseHeaders, body: availabilityBody },
+  });
 });
 
-test('a failed availability request leaves the rates usable', async () => {
+test('an availability HTTP error and a successful rate response both retain their original bodies', async () => {
+  const rateBody = rateResponseBody();
+  const availabilityBody = '{ "errors": [{ "code": "MOCK.AVAILABILITY.DENIED" }] }\n';
   const client = createFedExClient(config, async (url) => {
     switch (url.pathname) {
       case '/oauth/token': return tokenResponse();
-      case RATE_PATH: return rateResponse();
-      case AVAILABILITY_PATH: return Response.json({}, { status: 403 });
+      case RATE_PATH: return new Response(rateBody, { headers: responseHeaders });
+      case AVAILABILITY_PATH: return new Response(availabilityBody, { status: 403, headers: responseHeaders });
     }
     assert.fail(`Unexpected request: ${url.pathname}`);
   });
 
   const quote = await client.quote(input);
-  assert.equal(quote.rates.quotes[0].charges[0].amount, 84.2);
-  assert.equal(quote.rates.quotes[0].availability, undefined);
-  assert.equal(quote.serviceAvailability.error.httpStatus, 403);
-  assert.match(quote.serviceAvailability.error.message, /Service Availability/);
+  assert.deepEqual(quote, {
+    rates: { status: 200, headers: responseHeaders, body: rateBody },
+    serviceAvailability: { status: 403, headers: responseHeaders, body: availabilityBody },
+  });
 });
 
-test('a failed rates request leaves the available services usable', async () => {
+test('a rates transport failure leaves the original availability response usable', async () => {
+  const availabilityBody = availabilityResponseBody();
   const client = createFedExClient(config, async (url) => {
     switch (url.pathname) {
       case '/oauth/token': return tokenResponse();
-      case RATE_PATH: return Response.json({}, { status: 503 });
-      case AVAILABILITY_PATH: return availabilityResponse();
+      case RATE_PATH: throw new TypeError('Mock transport failure');
+      case AVAILABILITY_PATH: return new Response(availabilityBody, { headers: responseHeaders });
     }
     assert.fail(`Unexpected request: ${url.pathname}`);
   });
 
   const quote = await client.quote(input);
-  assert.equal(quote.rates.error.httpStatus, 503);
-  assert.equal(quote.serviceAvailability.services[0].serviceType, 'INTERNATIONAL_PRIORITY');
+  assert.match(quote.rates.error.message, /Unable to reach FedEx for rates/);
+  assert.deepEqual(quote.serviceAvailability, { status: 200, headers: responseHeaders, body: availabilityBody });
 });

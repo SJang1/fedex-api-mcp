@@ -83,9 +83,9 @@ MCP 클라이언트에서 샌드박스를 사용하려면 `env`에 `"FEDEX_ENV":
 }
 ```
 
-응답의 `environment`와 `virtualResponse`는 조회 환경과 가상화 여부를 나타냅니다. `transactionId`와 `alerts`는 FedEx가 제공할 때 포함됩니다. `requestedTrackingNumbers`는 요청 번호를 담고, `shipments`는 FedEx가 반환한 `trackingNumber`별 조회 결과(`matches`)를 담습니다. 각 결과는 배송 상태, 위치, 배송 예정 및 완료 시각, 상세 스캔 또는 조회 오류를 포함할 수 있습니다. 가상 응답의 배송 번호는 샘플 데이터에 따라 요청 번호와 다를 수 있습니다.
+첫 번째 MCP 텍스트 블록과 `structuredContent.body`에는 FedEx 조회 API의 응답 본문을 Fetch가 읽은 텍스트 그대로 담습니다. 두 번째 텍스트 블록과 `structuredContent`에서 HTTP 상태 코드(`status`)와 응답 헤더(`headers`)를 확인할 수 있습니다. 헤더 이름과 중복 헤더 값에는 Fetch의 정규화가 적용되며 `authorization`, `proxy-authorization`, `set-cookie`는 제외됩니다. FedEx 조회 API가 오류 상태 코드를 반환할 때도 본문과 헤더를 제공하고 MCP 결과를 오류로 표시합니다.
 
-위 번호 `613746411451`은 FedEx 샌드박스의 배송 완료 샘플입니다. 다른 시나리오는 **JSON API Collection**에서 **Track by Tracking Numbers** 샘플을 선택해 테스트할 수 있습니다. `virtualResponse: true`는 FedEx 응답에 `VIRTUAL.RESPONSE`가 있다는 뜻입니다. 가상 시나리오에 해당하지 않는 요청은 샌드박스 테스트 인스턴스로 전달될 수 있습니다. [FedEx Track JSON 컬렉션](https://developer.fedex.com/wirc/jsonapi-collections/api_groups/Track/TrackAPI_collection.json) · [FedEx 샌드박스 가상화 가이드](https://developer.fedex.com/api/en-us/guides/sandboxvirtualization.html) · [FedEx 가상화 안내](https://developer.fedex.com/api/en-us/announcements/July_2023-Virtualization_Announcement.html)
+위 번호 `613746411451`은 FedEx 샌드박스의 배송 완료 샘플입니다. 다른 시나리오는 **JSON API Collection**에서 **Track by Tracking Numbers** 샘플을 선택해 테스트할 수 있습니다. FedEx 본문의 `alerts` 또는 `output.alerts`에 `VIRTUAL.RESPONSE` 코드가 있으면 가상 응답입니다. 샘플 응답의 운송장 번호는 요청 번호와 다를 수 있습니다. 가상 시나리오에 해당하지 않는 요청은 샌드박스 테스트 인스턴스로 전달될 수 있습니다. [FedEx Track JSON 컬렉션](https://developer.fedex.com/wirc/jsonapi-collections/api_groups/Track/TrackAPI_collection.json) · [FedEx 샌드박스 가상화 가이드](https://developer.fedex.com/api/en-us/guides/sandboxvirtualization.html) · [FedEx 가상화 안내](https://developer.fedex.com/api/en-us/announcements/July_2023-Virtualization_Announcement.html)
 
 ## 운임·배송 소요 시간·서비스 가용성 조회
 
@@ -153,10 +153,8 @@ MCP 클라이언트에서 샌드박스를 사용하려면 `env`에 `"FEDEX_ENV":
 
 ### 응답
 
-`rates.quotes`에는 서비스별 예상 운임(`charges`)과 예상 배송일·소요 시간(`transit`)이 담깁니다. 각 운임에는 FedEx가 제공한 요금 유형(`rateType`), 금액(`amount`), 통화(`currency`)가 포함됩니다. 입력한 통관 정보는 견적 요청에 사용됩니다. [FedEx 운임 및 배송 소요 시간 API](https://developer.fedex.com/api/en-us/catalog/rate/v1/docs.html)
+`structuredContent.rates`에는 운임·배송 소요 시간 API 응답이, `structuredContent.serviceAvailability`에는 서비스 가용성 API 응답이 담깁니다. 각 응답의 `body`는 Fetch가 읽은 원문 텍스트입니다. `status`는 HTTP 상태 코드이며 `headers`에는 운송장 조회와 같은 규칙이 적용됩니다. `transactionId`와 `alerts` 등은 FedEx 본문의 원래 위치에서 확인할 수 있습니다.
 
-`serviceAvailability.services`에는 해당 경로의 서비스와 포장 옵션이 담깁니다. 두 API가 성공하면 서비스 코드가 있는 견적의 `availability.serviceListed`가 가용성 목록에서 해당 서비스의 조회 여부를 표시합니다. 해당 서비스의 포장 옵션도 반환되면 `availability.packagingListed`에서 포장 유형의 조회 여부를 확인할 수 있습니다. `false`는 FedEx가 반환한 목록에 해당 항목이 없다는 뜻입니다. [FedEx 서비스 가용성 API](https://developer.fedex.com/api/en-us/catalog/service-availability/v1/docs.html)
-
-각 API 응답의 `virtualResponse`로 가상화 여부를 확인할 수 있으며, FedEx가 제공한 `transactionId`와 `alerts`도 전달됩니다. 한 API가 실패하면 해당 응답의 `error`와 성공한 응답을 함께 반환합니다.
+MCP 텍스트 블록에는 각 API의 `operation`과 HTTP 상태·헤더를 담은 JSON 블록 뒤에 응답 원문 블록이 이어집니다. 정상 응답과 HTTP 오류 응답 모두 이 형식으로 전달합니다. API에 연결하지 못하면 해당 항목에 `error`가 담깁니다. 두 API 호출이 모두 실패하면 MCP 결과를 오류로 표시합니다.
 
 로컬 모의 응답으로 동작을 검증하려면 `npm test`를 실행합니다.

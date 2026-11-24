@@ -4,6 +4,28 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
+function trackingResponseBody(trackingNumbers) {
+  return `${JSON.stringify({
+    transactionId: 'mock-transaction',
+    output: {
+      alerts: [{ code: 'VIRTUAL.RESPONSE' }],
+      completeTrackResults: trackingNumbers.map((trackingNumber) => ({
+        trackingNumber,
+        trackResults: [{
+          trackingNumberInfo: { trackingNumber },
+          latestStatusDetail: { code: 'IT', statusByLocale: '운송 중', description: 'In transit' },
+          scanEvents: [{ eventType: 'IT', eventDescription: 'In transit' }],
+        }],
+      })),
+    },
+  }, null, 2)}\n`;
+}
+
+const trackingErrorBody = '{ "errors": [{ "code": "MOCK.TRACK.ERROR", "message": "FedEx rejected the request." }] }\n';
+const rateBody = '{ "output": { "rateReplyDetails": [{ "serviceType": "INTERNATIONAL_PRIORITY" }] } }\n';
+const availabilityBody = '{ "output": { "packageOptions": [{ "serviceType": { "key": "INTERNATIONAL_PRIORITY" }, "packageType": { "key": "YOUR_PACKAGING" } }] } }\n';
+const quoteErrorBody = 'FedEx unavailable\n';
+
 function installFetchMock() {
   let requestNumber = 0;
 
@@ -31,7 +53,7 @@ function installFetchMock() {
       assert.deepEqual(payload.rateRequestControlParameters, { returnTransitTimes: true });
       assert.equal(payload.accountNumber.value, '000123456');
       assert.equal(payload.requestedShipment.shipper.address.countryCode, 'KR');
-      assert.equal(payload.requestedShipment.shipDateStamp, '2026-11-30');
+      assert.ok(['2026-11-30', '2026-12-01'].includes(payload.requestedShipment.shipDateStamp));
       assert.equal(payload.requestedShipment.pickupType, 'DROPOFF_AT_FEDEX_LOCATION');
       assert.deepEqual(payload.requestedShipment.rateRequestType, ['LIST']);
       assert.deepEqual(payload.requestedShipment.customsClearanceDetail, { commodities: [{
@@ -40,7 +62,9 @@ function installFetchMock() {
         countryOfManufacture: 'KR',
         customsValue: { amount: 25, currency: 'USD' },
       }] });
-      return Response.json({ output: { rateReplyDetails: [{ serviceType: 'INTERNATIONAL_PRIORITY' }] } });
+      return payload.requestedShipment.shipDateStamp === '2026-12-01'
+        ? new Response(quoteErrorBody, { status: 503 })
+        : new Response(rateBody, { headers: { 'content-type': 'application/json' } });
     }
 
     if (url.pathname === '/availability/v1/packageandserviceoptions') {
@@ -48,40 +72,39 @@ function installFetchMock() {
       assert.equal(payload.requestedShipment.recipients[0].address.postalCode, '94103');
       assert.equal(payload.requestedShipment.requestedPackageLineItems[0].physicalPackaging, 'YOUR_PACKAGING');
       assert.equal(Object.hasOwn(payload.requestedShipment, 'customsClearanceDetail'), false);
-      return Response.json({ output: { packageOptions: [{
-        serviceType: { key: 'INTERNATIONAL_PRIORITY' },
-        packageType: { key: 'YOUR_PACKAGING' },
-      }] } });
+      return payload.requestedShipment.shipDateStamp === '2026-12-01'
+        ? new Response(quoteErrorBody, { status: 503 })
+        : new Response(availabilityBody, { headers: { 'content-type': 'application/json' } });
     }
 
     assert.equal(url.pathname, '/track/v1/trackingnumbers');
-    assert.ok(requestNumber <= 3);
     const detailed = requestNumber === 3;
-    const trackingNumbers = detailed ? ['000000000333'] : ['000000001234', '000000000222'];
+    const trackingNumbers = [
+      ['000000001234', '000000000222'],
+      ['000000000333'],
+      ['000000000444'],
+    ][requestNumber - 2];
+    assert.ok(trackingNumbers);
     assert.deepEqual(payload, {
       includeDetailedScans: detailed,
       trackingInfo: trackingNumbers.map((trackingNumber) => ({ trackingNumberInfo: { trackingNumber } })),
     });
 
-    return Response.json({
-      transactionId: 'mock-transaction',
-      output: {
-        alerts: [{ code: 'VIRTUAL.RESPONSE' }],
-        completeTrackResults: trackingNumbers.map((trackingNumber) => ({
-          trackingNumber,
-          trackResults: [{
-            trackingNumberInfo: { trackingNumber },
-            latestStatusDetail: { code: 'IT', statusByLocale: '운송 중', description: 'In transit' },
-            scanEvents: [{ eventType: 'IT', eventDescription: 'In transit' }],
-          }],
-        })),
-      },
+    return new Response(requestNumber === 4 ? trackingErrorBody : trackingResponseBody(trackingNumbers), {
+      status: requestNumber === 4 ? 400 : 200,
+      headers: { 'content-type': 'application/json', 'x-fedex-id': 'mock-response-id' },
     });
   };
 }
 
 const entry = fileURLToPath(new URL('../src/index.js', import.meta.url));
-const preload = `import assert from 'node:assert/strict'; (${installFetchMock.toString()})();`;
+const preload = `import assert from 'node:assert/strict';
+${trackingResponseBody.toString()}
+const trackingErrorBody = ${JSON.stringify(trackingErrorBody)};
+const rateBody = ${JSON.stringify(rateBody)};
+const availabilityBody = ${JSON.stringify(availabilityBody)};
+const quoteErrorBody = ${JSON.stringify(quoteErrorBody)};
+(${installFetchMock.toString()})();`;
 const mockModule = `data:text/javascript,${encodeURIComponent(preload)}`;
 
 for (const [era, mode] of [['legacy', 'legacy'], ['modern', { pin: '2026-07-28' }]]) {
@@ -117,17 +140,23 @@ for (const [era, mode] of [['legacy', 'legacy'], ['modern', { pin: '2026-07-28' 
     assert.equal(invalid.isError, true);
     assert.match(invalid.content[0].text, /Input validation error/);
 
-    const summary = await callTool({ trackingNumbers: ['  000000001234  ', '000000000222'] });
-    assert.equal(Boolean(summary.isError), false, summary.content[0]?.text);
-    assert.deepEqual(JSON.parse(summary.content[0].text), summary.structuredContent);
-    assert.deepEqual(summary.structuredContent.requestedTrackingNumbers, ['000000001234', '000000000222']);
-    assert.equal(summary.structuredContent.virtualResponse, true);
-    assert.equal(summary.structuredContent.shipments[0].matches[0].status.description, '운송 중');
-    assert.equal(summary.structuredContent.shipments[0].matches[0].scanEvents, undefined);
+    const tracked = await callTool({ trackingNumbers: ['  000000001234  ', '000000000222'] });
+    const headers = { 'content-type': 'application/json', 'x-fedex-id': 'mock-response-id' };
+    const body = trackingResponseBody(['000000001234', '000000000222']);
+    assert.equal(Boolean(tracked.isError), false, tracked.content[0]?.text);
+    assert.equal(tracked.content[0].text, body);
+    assert.deepEqual(JSON.parse(tracked.content[1].text), { status: 200, headers });
+    assert.deepEqual(tracked.structuredContent, { status: 200, headers, body });
 
     const detailed = await callTool({ trackingNumbers: ['000000000333'], includeDetailedScans: true });
     assert.equal(Boolean(detailed.isError), false, detailed.content[0]?.text);
-    assert.equal(detailed.structuredContent.shipments[0].matches[0].scanEvents[0].eventType, 'IT');
+    assert.equal(detailed.content[0].text, trackingResponseBody(['000000000333']));
+
+    const rejected = await callTool({ trackingNumbers: ['000000000444'] });
+    assert.equal(rejected.isError, true);
+    assert.equal(rejected.content[0].text, trackingErrorBody);
+    assert.deepEqual(JSON.parse(rejected.content[1].text), { status: 400, headers });
+    assert.deepEqual(rejected.structuredContent, { status: 400, headers, body: trackingErrorBody });
 
     const shipment = {
       origin: { countryCode: ' kr ', postalCode: '04524' },
@@ -152,10 +181,22 @@ for (const [era, mode] of [['legacy', 'legacy'], ['modern', { pin: '2026-07-28' 
       assert.match(quoted.content[0].text, /FEDEX_ACCOUNT_NUMBER/);
     } else {
       assert.equal(Boolean(quoted.isError), false, quoted.content[0]?.text);
-      assert.deepEqual(quoted.structuredContent.rates.quotes[0].availability, {
-        serviceListed: true,
-        packagingListed: true,
+      const jsonHeaders = { 'content-type': 'application/json' };
+      assert.deepEqual(quoted.structuredContent, {
+        rates: { status: 200, headers: jsonHeaders, body: rateBody },
+        serviceAvailability: { status: 200, headers: jsonHeaders, body: availabilityBody },
       });
+      assert.deepEqual(JSON.parse(quoted.content[0].text), { operation: 'rates', status: 200, headers: jsonHeaders });
+      assert.equal(quoted.content[1].text, rateBody);
+      assert.deepEqual(JSON.parse(quoted.content[2].text), { operation: 'serviceAvailability', status: 200, headers: jsonHeaders });
+      assert.equal(quoted.content[3].text, availabilityBody);
+
+      const unavailable = await quote({ ...shipment, shipDate: '2026-12-01' });
+      assert.equal(unavailable.isError, true);
+      assert.equal(unavailable.structuredContent.rates.status, 503);
+      assert.equal(unavailable.structuredContent.serviceAvailability.status, 503);
+      assert.equal(unavailable.content[1].text, quoteErrorBody);
+      assert.equal(unavailable.content[3].text, quoteErrorBody);
     }
   });
 }

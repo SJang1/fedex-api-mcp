@@ -53,60 +53,70 @@ test('concurrent requests share the refreshed token after a FedEx 401', async ()
   assert.deepEqual(trackingTokens, ['Bearer token-1', 'Bearer token-1', 'Bearer token-2', 'Bearer token-2']);
 });
 
-test('successful batches retain shipment dates, delivery location, and individual FedEx errors', async () => {
+test('tracking preserves the original response body and returns safe response headers', async () => {
   const trackingNumbers = ['000001', '000002'];
   const estimatedDelivery = '2026-11-25T14:30:00+09:00';
   const actualDelivery = '2026-11-25T12:30:00+09:00';
   const fedexError = { code: 'TRACKING.DATA.NOTFOUND', message: 'No tracking information found.' };
-  const client = createFedExClient(config, async (url) => {
-    if (url.pathname === '/oauth/token') {
-      return Response.json({ access_token: 'mock-token', expires_in: 3600 });
-    }
+  const body = `${JSON.stringify({
+    output: {
+      completeTrackResults: [
+        {
+          trackingNumber: trackingNumbers[0],
+          trackResults: [{
+            trackingNumberInfo: { trackingNumber: trackingNumbers[0] },
+            latestStatusDetail: {
+              code: 'DL',
+              description: 'Delivered',
+              scanLocation: { city: 'Seoul', countryCode: 'KR', streetLines: ['Example address'] },
+            },
+            dateAndTimes: [
+              { type: 'ESTIMATED_DELIVERY', dateTime: estimatedDelivery },
+              { type: 'ACTUAL_DELIVERY', dateTime: actualDelivery },
+            ],
+          }],
+        },
+        { trackingNumber: trackingNumbers[1], trackResults: [{ error: fedexError }] },
+      ],
+    },
+  }, null, 2)}\r\n`;
+  const client = createFedExClient(config, async (url) => url.pathname === '/oauth/token'
+    ? Response.json({ access_token: 'mock-token', expires_in: 3600 })
+    : new Response(body, { headers: {
+      'Content-Type': 'application/json',
+      'X-FedEx-ID': 'mock-request-id',
+      Authorization: 'Bearer mock-response-token',
+      'Proxy-Authorization': 'Basic bW9jaw==',
+      'Set-Cookie': 'mock-session=secret',
+    } }));
 
-    return Response.json({
-      output: {
-        completeTrackResults: [
-          {
-            trackingNumber: trackingNumbers[0],
-            trackResults: [{
-              trackingNumberInfo: { trackingNumber: trackingNumbers[0] },
-              latestStatusDetail: {
-                code: 'DL',
-                description: 'Delivered',
-                scanLocation: { city: 'Seoul', countryCode: 'KR', streetLines: ['Example address'] },
-              },
-              dateAndTimes: [
-                { type: 'ESTIMATED_DELIVERY', dateTime: estimatedDelivery },
-                { type: 'ACTUAL_DELIVERY', dateTime: actualDelivery },
-              ],
-            }],
-          },
-          { trackingNumber: trackingNumbers[1], trackResults: [{ error: fedexError }] },
-        ],
-      },
+  assert.deepEqual(await client.track(trackingNumbers, false), {
+    status: 200,
+    headers: { 'content-type': 'application/json', 'x-fedex-id': 'mock-request-id' },
+    body,
+  });
+});
+
+test('tracking returns the final HTTP 401 body after one token refresh', async () => {
+  const body = '{ "output": { "alerts": [{ "code": "MOCK.TRACK.ERROR", "message": "Access denied." }] } }\n';
+  const trackingTokens = [];
+  let tokenRequests = 0;
+  const client = createFedExClient(config, async (url, { headers }) => {
+    if (url.pathname === '/oauth/token') {
+      tokenRequests += 1;
+      return Response.json({ access_token: `token-${tokenRequests}`, expires_in: 3600 });
+    }
+    trackingTokens.push(headers.authorization);
+    return new Response(tokenRequests === 1 ? 'Initial access denied' : body, {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
     });
   });
 
-  const result = await client.track(trackingNumbers, false);
-  const [delivered, notFound] = result.shipments;
-  assert.equal(result.virtualResponse, false);
-  assert.equal(delivered.matches[0].location.city, 'Seoul');
-  assert.equal(delivered.matches[0].location.streetLines, undefined);
-  assert.equal(delivered.matches[0].estimatedDelivery, estimatedDelivery);
-  assert.equal(delivered.matches[0].actualDelivery, actualDelivery);
-  assert.equal(notFound.trackingNumber, trackingNumbers[1]);
-  assert.deepEqual(notFound.matches[0].error, fedexError);
-});
-
-test('a tracking response with only an alert preserves the FedEx message', async () => {
-  const alert = { code: 'TRACKING.DATA.NOTFOUND', message: 'No tracking information found.', alertType: 'NOTE' };
-  const client = createFedExClient(config, async (url) => Response.json(
-    url.pathname === '/oauth/token'
-      ? { access_token: 'mock-token', expires_in: 3600 }
-      : { output: { alerts: [alert] } },
-  ));
-
-  const result = await client.track(['000001'], false);
-  assert.deepEqual(result.shipments, []);
-  assert.deepEqual(result.alerts, [alert]);
+  assert.deepEqual(await client.track(['000001'], false), {
+    status: 401,
+    headers: { 'content-type': 'application/json' },
+    body,
+  });
+  assert.deepEqual(trackingTokens, ['Bearer token-1', 'Bearer token-2']);
 });

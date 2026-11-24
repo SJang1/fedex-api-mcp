@@ -39,12 +39,18 @@ const commoditySchema = z.object({
   harmonizedCode: z.string().trim().min(1).optional(),
 });
 
-function toolResult(result, isError = false) {
-  return {
-    ...(isError ? { isError: true } : {}),
-    structuredContent: result,
-    content: [{ type: 'text', text: JSON.stringify(result) }],
-  };
+function failedResponse({ status, error }) {
+  return Boolean(error) || status < 200 || status >= 300;
+}
+
+function quotePartContent(operation, { status, headers, body, error }) {
+  if (error) {
+    return [{ type: 'text', text: JSON.stringify({ operation, error }) }];
+  }
+  return [
+    { type: 'text', text: JSON.stringify({ operation, status, headers }) },
+    { type: 'text', text: body },
+  ];
 }
 
 function toolError(error, fallback) {
@@ -59,7 +65,7 @@ export function createServer(fedex) {
 
   server.registerTool('fedex_track', {
     title: 'Track FedEx shipments',
-    description: 'Look up up to 30 FedEx tracking numbers. Returns the latest shipment status, delivery dates, and optional scan history. Sandbox results may be simulated.',
+    description: 'Look up up to 30 FedEx tracking numbers. Returns the original FedEx response body and the HTTP status and headers. Sandbox results may be simulated.',
     inputSchema: z.object({
       trackingNumbers: z.array(z.string().trim().min(1)).min(1).max(30)
         .describe('FedEx tracking numbers as strings. Preserve leading zeros.'),
@@ -68,7 +74,16 @@ export function createServer(fedex) {
     annotations: { readOnlyHint: true, openWorldHint: true },
   }, async ({ trackingNumbers, includeDetailedScans }) => {
     try {
-      return toolResult(await fedex.track(trackingNumbers, includeDetailedScans));
+      const result = await fedex.track(trackingNumbers, includeDetailedScans);
+      const { status, headers, body } = result;
+      return {
+        ...(failedResponse(result) ? { isError: true } : {}),
+        structuredContent: result,
+        content: [
+          { type: 'text', text: body },
+          { type: 'text', text: JSON.stringify({ status, headers }) },
+        ],
+      };
     } catch (error) {
       return toolError(error, 'Unable to process the FedEx tracking response.');
     }
@@ -76,7 +91,7 @@ export function createServer(fedex) {
 
   server.registerTool('fedex_quote', {
     title: 'Compare FedEx rates, transit times, and service availability',
-    description: 'Get shipping rate and transit estimates and check FedEx service and packaging availability for the same route and ship date in one call. Sandbox results may be simulated.',
+    description: 'Get FedEx rate and transit estimates and service and packaging availability for the same route and ship date. Returns the original response body, HTTP status, and headers for each API. Sandbox results may be simulated.',
     inputSchema: z.object({
       origin: addressSchema,
       destination: addressSchema,
@@ -103,7 +118,15 @@ export function createServer(fedex) {
   }, async (input) => {
     try {
       const result = await fedex.quote(input);
-      return toolResult(result, Boolean(result.rates.error && result.serviceAvailability.error));
+      const { rates, serviceAvailability } = result;
+      return {
+        ...(failedResponse(rates) && failedResponse(serviceAvailability) ? { isError: true } : {}),
+        structuredContent: result,
+        content: [
+          ...quotePartContent('rates', rates),
+          ...quotePartContent('serviceAvailability', serviceAvailability),
+        ],
+      };
     } catch (error) {
       return toolError(error, 'Unable to process the FedEx quote.');
     }
